@@ -46,7 +46,7 @@
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
             #include  "../../../Common/Shaders/Math.hlsl"
-            #include  "../../../Common/Shaders/CustomBrdf.hlsl"
+            #include  "../../../Common/Shaders/CommonBSDF.hlsl"
             
             // 定义 MRT 输出结构体
             struct FragmentOutput
@@ -130,20 +130,13 @@
                 F0 = lerp(F0, albedo.rgb, _Metallic);
 
 
-                float3 F = F_Schlick_Custom(VdotH, F0);
-                float G = G_SmithJointGGX_Custom(NdotL, NdotV, _Roughness * _Roughness);
-                float D = D_GGX_Custom(NdotH, _Roughness * _Roughness);
-                
-                float3 ggx_BRDF = D * G * F / max(4.0f * NdotL * NdotV, 0.000001f);;
-                float3 direct_specular_radiance = ggx_BRDF * main_light.color * NdotL * PI;
-                float3 IBL_ambient = IBL_SpecularCustom(final_normal_ws, V, NdotV, F0, _Roughness);
                 // ==== IBL 间接高光 (掠射角 → 边缘发光) ====
-                float3 specular_radiance = direct_specular_radiance + IBL_ambient;
+                float3 specular_radiance = 0.0h;
 
 
                 // Diffuse
                 // 根据能量守恒，高光弹飞了 F，剩下钻进物体的光就是 (1 - F)
-                float3 kD = 1.0f - F;
+                float3 kD = 1.0f;
                 // Diffuse BRDF: c/PI, 但是美术认为如果给 1.0 的光不该是 1 /PI，所以给Diffuse 和 Specular 的BRDF 都乘 PI
                 // C 就是 albedo.rgb
                 float3 direct_diffuse_radiance = albedo.rgb * main_light.color * NdotL; // 普通的 PBR
@@ -155,7 +148,7 @@
                 // 纯金属没有漫反射（光子进不去，直接吸收或弹飞）
                 
                 // 专门给 SSS 打造的 diffuse 的加了菲涅尔入射率的 irradiance
-                float3 Ft_in = 1.0f - F_Schlick_Custom(NdotL, F0);
+                float3 Ft_in = 1.0f - F_Schlick(NdotL, F0);
                 float3 sss_direct_diffuse_irradiance = Ft_in * albedo.rgb * main_light.color * NdotL;
                 float3 sss_diffuse_irradiance = sss_direct_diffuse_irradiance * (1.0f - _Metallic);
                 //环境光就不扔进去了，低频送给SSS模糊没意义，最后直接叠加上去。如果要扔进去，写成 ∫ (1- FSchlick) * dot(N,wi) dwi

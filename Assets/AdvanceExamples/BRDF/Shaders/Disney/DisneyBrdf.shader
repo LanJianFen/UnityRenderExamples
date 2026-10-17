@@ -82,8 +82,8 @@ Shader "Advance Examples/BRDF/Disney BRDF"
                 half3 V = normalize(GetCameraPositionWS() - i.position_ws);
                 half3 H = normalize(L + V);
 
+                half NdotV = max(dot(N, V), 0.01h);
                 half NdotL = saturate(dot(N, L));
-                half NdotV = saturate(dot(N, V));
                 half NdotH = saturate(dot(N, H));
                 half VdotH = saturate(dot(V, H));
                 

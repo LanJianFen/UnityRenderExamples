@@ -20,6 +20,7 @@ MonoBehaviour:
   - {fileID: 11400000, guid: 707360a9c581a4bd7aa53bfeb1429f71, type: 2}
   - {fileID: 11400000, guid: 36a4f74c4467a2e45bc54e2fcdea2577, type: 2}
   - {fileID: 11400000, guid: fbba7126c274f20458d3b0b1ef3859fa, type: 2}
+  - {fileID: 11400000, guid: f9e662104ee21714c85a8bf7021654ec, type: 2}
   m_DefaultRendererIndex: 0
   m_RequireDepthTexture: 1
   m_RequireOpaqueTexture: 1
@@ -72,7 +73,7 @@ MonoBehaviour:
   m_EnableRenderGraph: 0
   m_UseAdaptivePerformance: 1
   m_ColorGradingMode: 0
-  m_ColorGradingLutSize: 16
+  m_ColorGradingLutSize: 32
   m_UseFastSRGBLinearConversion: 0
   m_SupportDataDrivenLensFlare: 1
   m_ShadowType: 1

@@ -49,7 +49,6 @@ Shader "Advance Examples/SSS/Separable Screen SSS"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Shadows.hlsl"
 
             #include  "Assets/Common/Shaders/Math.hlsl"
-            #include  "Assets/Common/Shaders/CustomBrdf.hlsl"
 
             struct Attributes
             {
@@ -167,7 +166,7 @@ Shader "Advance Examples/SSS/Separable Screen SSS"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
             #include  "Assets/Common/Shaders/Math.hlsl"
-            #include  "Assets/Common/Shaders/CustomBrdf.hlsl"
+            #include  "Assets/Common/Shaders/CommonBSDF.hlsl"
 
             struct Attributes
             {
@@ -245,13 +244,13 @@ Shader "Advance Examples/SSS/Separable Screen SSS"
                 // 基础反射率 F0 (非金属为 0.04，金属为 Albedo)
                 float3 F0 = float3(0.08, 0.08, 0.08) * _Specular;
 
-                float3 F = F_Schlick_Custom(VdotH, F0);
-                float G = G_SmithJointGGX_Custom(NdotL, NdotV, _Roughness * _Roughness);
-                float D = D_GGX_Custom(NdotH, _Roughness * _Roughness);
+                float3 F = F_Schlick(F0, VdotH);
+                float G = V_SmithJointGGX(NdotL, NdotV, _Roughness * _Roughness);
+                float D = D_GGX(NdotH, _Roughness * _Roughness);
 
                 float3 ggx_BRDF = D * G * F / max(4.0f * NdotL * NdotV, 0.000001f);;
                 float3 direct_specular_radiance = ggx_BRDF * main_light.color * NdotL * PI;
-                float3 IBL_ambient = IBL_SpecularCustom(final_normal_ws, V, NdotV, F0, _Roughness);
+                float3 IBL_ambient = IBL_Specular_Approximation(V, final_normal_ws, F0, _Roughness);
                 // ==== IBL 间接高光 (掠射角 → 边缘发光) ====
                 float3 specular_radiance = direct_specular_radiance + IBL_ambient;
 
@@ -259,7 +258,7 @@ Shader "Advance Examples/SSS/Separable Screen SSS"
                 float3 kD = 1.0f - F;
                 float3 sh_ambient = albedo.rgb * SampleSH(final_normal_ws) * kD;
 
-                float3 Ft_out = 1.0f - F_Schlick_Custom(NdotV, F0);
+                float3 Ft_out = 1.0f - F;
                 float2 ss_uv = i.position_cs.xy / _ScreenParams.xy;
                 float3 sss_radiance = Ft_out * SAMPLE_TEXTURE2D(_SeparableSubsurfaceScatteringRT,
                 sampler_SeparableSubsurfaceScatteringRT, ss_uv).rgb;
