@@ -1,3 +1,4 @@
+#pragma once
 // 2007 对 GGX(GTR2) 推导出的精确 G项
 // Bruce Walter 在物理上给 α 的严谨定义是：微表面山坡斜率的均方根（RMS Slope）。
 // shadowing : 2 * (N · L) / [ N · L  + sart( α² + (N · L)² * (1 - α²) ]

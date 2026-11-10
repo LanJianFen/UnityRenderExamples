@@ -1,0 +1,139 @@
+// 文件名: BakeBrdfEnergyLut.compute
+#pragma kernel SPI2017SpecularLUT
+
+#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+#include "SPI2017Isotropic.hlsl"
+
+// 输出的 2D 浮点贴图
+RWTexture2D<float4> _ResultLut;
+uint _LutSize;
+
+// =========================================================================
+// SPI 2017 Diffuse 预计算烘焙模块：蒙特卡洛重要性采样计算 E(μ, α) 与 E_avg(α)
+// =========================================================================
+
+// 生成 Hammersley 低差异准随机序列 (比普通伪随机数收敛快得多)
+//    输入当前采样序号 i 与总采样数 N，输出 [0, 1)^2 的二维均匀采样点 (xi_1, xi_2)
+float2 Hammersley2D(uint i, uint N)
+{
+    // Van der Corput 序列 (将二进制位镜像反转到小数点后)
+    uint bits = (i << 16u) | (i >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    float radical_inverse = float(bits) * 2.3283064365386963e-10; // 除以 2^32
+    return float2(float(i) / float(N), radical_inverse);
+}
+
+//    GGX 法线分布 (NDF) 逆变换重要性采样
+//    在切线空间 (N = (0, 0, 1)) 下，根据概率密度 p(H) = D(H) * (N·H) 生成半角向量 H
+float3 ImportanceSampleGGX_NDF(float2 xi, float roughness)
+{
+    float alpha = roughness * roughness;
+    float alpha2 = alpha * alpha;
+
+    // 方位角 phi = 2 * PI * xi.x
+    float phi = 2.0 * PI * xi.x;
+
+    // 极角余弦 cosTheta = sqrt((1 - xi.y) / (1 + (alpha^2 - 1) * xi.y))
+    float cos_theta = sqrt((1.0 - xi.y) / (1.0 + (alpha2 - 1.0) * xi.y));
+    float sin_theta = sqrt(saturate(1.0 - cos_theta * cos_theta));
+
+    // 球坐标转切线空间直角坐标
+    return float3(sin_theta * cos(phi), sin_theta * sin(phi), cos_theta);
+}
+
+//   预计算特定视角 mu_o (即 N·V) 和粗糙度 roughness 下的定向反照率 E(mu_o, roughness)
+//    返回值 float3:
+//      .x = A(mu_o, r)  --> 对应 F0 的缩放权重: ∫ D * V * (1 - (1 - V·H)⁵) * (N·L) dω_i
+//      .y = B(mu_o, r)  --> 对应 F90 的偏置权重: ∫ D * V * (1 - V·H)⁵ * (N·L) dω_i
+//      .z = E_F1(mu_o, r) = A + B --> 对应 Kulla-Conty 白炉 (F=1) 的纯几何定向反照率！
+//      IBL Split Sum 的预计算也使用这个
+float3 PrecomputeSpecularAlbedo_E(float mu_o, float roughness, uint num_samples = 1024u)
+{
+    // 在切线空间下，法线 N = (0, 0, 1)，设视线 V 落在 XZ 平面内：
+    mu_o = max(mu_o, 1e-4);
+    float3 V = float3(sqrt(1.0 - mu_o * mu_o), 0.0, mu_o);
+
+    float sum_A = 0.0;
+    float sum_B = 0.0;
+
+    [loop] for (uint i = 0u; i < num_samples; ++i)
+    {
+        // Step A: 生成低差异随机点并采样出微表面半角向量 H
+        float2 xi = Hammersley2D(i, num_samples);
+        float3 H  = ImportanceSampleGGX_NDF(xi, roughness);
+
+        // Step B: 将视线 V 绕 H 对称反射，得到入射光方向 L = 2 * (V·H) * H - V
+        float VdotH = saturate(dot(V, H));
+        float3 L    = 2.0 * VdotH * H - V;
+
+        // 在切线空间下，N = (0, 0, 1)，因此 N·L 就是 L.z，N·H 就是 H.z
+        float NdotL = saturate(L.z);
+        float NdotH = saturate(H.z);
+
+        // Step C: 只有当反射出的入射光 L 位于上半球 (NdotL > 0) 时才有效
+        if (NdotL > 0.0)
+        {
+            // 调用我们之前写好的高度相关精确 Smith V 项: V = G / (4 * NdotL * NdotV)
+            float V_smith = V_SmithJointGGX_SPI2017(roughness, NdotL, mu_o);
+
+            // 代入蒙特卡洛相除抵消 D(H) 后的几何权重公式:
+            // G_vis = 4 * V_smith * NdotL * VdotH / NdotH
+            float G_vis = (4.0 * V_smith * NdotL * VdotH) / max(NdotH, 1e-5);
+
+            // 拆分为 F0 项与 F90 项分别累加
+            float Fc = pow(1.0 - VdotH, 5.0);
+            sum_A += (1.0 - Fc) * G_vis;
+            sum_B += Fc * G_vis;
+        }
+    }
+
+    float A = sum_A / float(num_samples);
+    float B = sum_B / float(num_samples);
+    return float3(A, B, A + B); // .z 通道直接就是 Kulla-Conty 的 E(mu_o) (当 F=1 时)
+}
+
+//    预计算半球平均反照率 E_avg(roughness) = 2 * ∫_0^1 E(μ, roughness) * μ dμ
+//    使用中点黎曼求和 (Midpoint Riemann Sum) 对 μ ∈ [0, 1] 进行一维数值积分
+float3 PrecomputeSpecularAlbedo_Eavg(float roughness, uint num_mu_steps = 64u, uint num_mc_samples = 512u)
+{
+    float3 sum_avg = float3(0.0, 0.0, 0.0);
+    float delta_mu = 1.0 / float(num_mu_steps);
+
+    [loop] for (uint j = 0u; j < num_mu_steps; ++j)
+    {
+        // 取每个积分小区间的中点 mu_j ∈ (0, 1)
+        float mu_j = (float(j) + 0.5) * delta_mu;
+
+        // 算出该角度下的 (A, B, E_F1)
+        float3 E_mu = PrecomputeSpecularAlbedo_E(mu_j, roughness, num_mc_samples);
+
+        // 累加被积函数: 2 * E(mu) * mu * d(mu)
+        sum_avg += 2.0 * E_mu * mu_j * delta_mu;
+    }
+
+    // 返回值 .x = A_avg, .y = B_avg, .z = E_F1_avg
+    // 对于任意材质 F0 和 F90，最终 E_avg = F0 * sum_avg.x + F90 * sum_avg.y
+    return sum_avg;
+}
+
+[numthreads(8, 8, 1)]
+void SPI2017SpecularLUT(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= _LutSize || id.y >= _LutSize) return;
+
+    // 半纹素中心偏移映射到 (0, 1)
+    float mu_o      = (float(id.x) + 0.5) / float(_LutSize);
+    float roughness = (float(id.y) + 0.5) / float(_LutSize);
+
+    // 直接调用你在 SPI2017DiffusePrecompute.hlsl 里写好的两个预计算函数！
+    // 返回值 .x = A, .y = B, .z = A + B (即 F=1 时的白炉反照率)
+    float3 E_mu  = PrecomputeSpecularAlbedo_E(mu_o, roughness, 1024u);
+    float3 E_avg = PrecomputeSpecularAlbedo_Eavg(roughness, 64u, 256u);
+
+    // 打包写入 4 个通道：
+    // R = A(mu_o, r), G = B(mu_o, r), B = A_avg(r), A = B_avg(r)
+    _ResultLut[id.xy] = float4(E_mu.x, E_mu.y, E_avg.x, E_avg.y);
+}

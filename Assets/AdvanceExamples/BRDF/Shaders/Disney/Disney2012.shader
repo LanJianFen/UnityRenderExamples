@@ -1,4 +1,4 @@
-Shader "Advance Examples/BRDF/Disney BRDF"
+Shader "Advance Examples/BRDF/Disney 2012"
 {
     Properties
     {
@@ -67,18 +67,18 @@ Shader "Advance Examples/BRDF/Disney BRDF"
 
             half4 Frag(Varings i) : SV_TARGET
             {
-                half3 albedo = _Albedo;
+                half3 Albedo = _Albedo;
                 // 构建 TBN 矩阵
                 //half3 tangent_ws = normalize(i.tangent_ws.xyz);
                 //half3 bitangent_ws = normalize(cross(i.normal_ws, i.tangent_ws.xyz) * i.tangent_ws.w * GetOddNegativeScale());
-                half3 normal_ws = normalize(i.normal_ws);
+                half3 NormalWS = normalize(i.normal_ws);
                 //half3x3 tbn = half3x3(tangent_ws, bitangent_ws, normal_ws);
                 
-                Light main_light = GetMainLight();
-                half3 light_color = main_light.color;
+                Light MainLight = GetMainLight();
+                half3 LightColor = MainLight.color;
                 
-                half3 N = normal_ws;
-                half3 L = main_light.direction;
+                half3 N = NormalWS;
+                half3 L = MainLight.direction;
                 half3 V = normalize(GetCameraPositionWS() - i.position_ws);
                 half3 H = normalize(L + V);
 
@@ -89,10 +89,10 @@ Shader "Advance Examples/BRDF/Disney BRDF"
                 
                 half3 specular_brdf = 
                         D_GTR2_Disney(_Roughness, NdotH) * 
-                        F_Schlick_Disney(albedo, _Specular, _SpecularTint, _Metallic, VdotH) * 
+                        F_Schlick_Disney(Albedo, _Specular, _SpecularTint, _Metallic, VdotH) * 
                         V_SmithSeparable_GTR2_Disney(_Roughness, NdotL, NdotV);
                 
-                half3 main_specular = specular_brdf * light_color * NdotL;
+                half3 main_specular = specular_brdf * LightColor * NdotL;
 
                 half3 radiance = main_specular;
 

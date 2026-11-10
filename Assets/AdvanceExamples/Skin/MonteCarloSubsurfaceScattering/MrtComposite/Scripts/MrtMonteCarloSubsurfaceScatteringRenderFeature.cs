@@ -14,10 +14,10 @@ namespace AdvanceExamples.Skin.MonteCarloSubsurfaceScattering.MrtComposite.Scrip
         private class MrtMonteCarloSubsurfaceScatteringPass : ScriptableRenderPass
         {
             // profiling
-            private readonly ProfilingSampler _profilingSampler = new ("Monte Carlo Subsurface Scattering Pass");
+            private static readonly ProfilingSampler _profilingSampler = new ("Monte Carlo Subsurface Scattering Pass");
 
             private QualitySettings _settings;
-            private Material _monteCarloCoreMaterial, _compositeMaterial;
+            private Material _scatteringMaterial, _compositeMaterial;
             
             // Light Mode
             private static readonly ShaderTagId _forwardTagId = new ("Monte Carlo Subsurface Forward");
@@ -26,20 +26,22 @@ namespace AdvanceExamples.Skin.MonteCarloSubsurfaceScattering.MrtComposite.Scrip
             // 参数
             private static readonly int _rcpScatteringDistanceParam = Shader.PropertyToID("_RcpMonteCarloScatteringDistance");
             private static readonly int _scatteringScaleParam = Shader.PropertyToID("_MonteCarloScatteringScale");
+            private static readonly int _sampleNumParam = Shader.PropertyToID("_MonteCarloScatteringSampleNum");
+            private static readonly int _baseColorScatteringWeightParam = Shader.PropertyToID("_MonteCarloBaseColorScatteringWeight");
 
             // RT
             private readonly RenderTargetIdentifier[] _forwardMrts = new RenderTargetIdentifier[3];
-            private RTHandle _diffuseRt, _specularRt, _albedoRt, _scatteringRt;
+            private RTHandle _diffuseRt, _specularRt, _baseColorRt, _scatteringRt;
             
-            private static readonly int _diffuseRtId = Shader.PropertyToID("_MonteCarloSubsurfaceDiffuseRT");
-            private static readonly int _specularRtId = Shader.PropertyToID("_MonteCarloSubsurfaceSpecularRT");
-            private static readonly int _albedoRtId = Shader.PropertyToID("_MonteCarloSubsurfaceAlbedoRT");
-            private static readonly int _scatteringRtId = Shader.PropertyToID("_MonteCarloSubsurfaceScatteringRT");
+            private static readonly int _diffuseRtId = Shader.PropertyToID("_MonteCarloSubsurfaceDiffuseRt");
+            private static readonly int _specularRtId = Shader.PropertyToID("_MonteCarloSubsurfaceSpecularRt");
+            private static readonly int _baseColorRtId = Shader.PropertyToID("_MonteCarloSubsurfaceBaseColorRt");
+            private static readonly int _scatteringRtId = Shader.PropertyToID("_MonteCarloSubsurfaceScatteringRt");
 
-            public void Setup(QualitySettings settings, Material monteCarloCoreMaterial, Material compositeMaterial)
+            public void Setup(QualitySettings settings, Material scatteringMaterial, Material compositeMaterial)
             {
                 _settings = settings;
-                _monteCarloCoreMaterial = monteCarloCoreMaterial;
+                _scatteringMaterial = scatteringMaterial;
                 _compositeMaterial = compositeMaterial;
                 renderPassEvent = _settings.ForwardPassEvent;
             }
@@ -65,11 +67,11 @@ namespace AdvanceExamples.Skin.MonteCarloSubsurfaceScattering.MrtComposite.Scrip
                 RenderingUtils.ReAllocateIfNeeded(ref _specularRt, descriptor, FilterMode.Bilinear,TextureWrapMode.Clamp, name: "Subsurface Scattering Specular RT");
 
                 descriptor.graphicsFormat = GraphicsFormat.R8G8B8A8_SRGB;
-                RenderingUtils.ReAllocateIfNeeded(ref _albedoRt, descriptor, FilterMode.Bilinear,TextureWrapMode.Clamp, name: "Subsurface Scattering Specular RT");
+                RenderingUtils.ReAllocateIfNeeded(ref _baseColorRt, descriptor, FilterMode.Bilinear,TextureWrapMode.Clamp, name: "Subsurface Scattering Base Color RT");
 
                 _forwardMrts[0] = _diffuseRt.nameID;
                 _forwardMrts[1] = _specularRt.nameID;
-                _forwardMrts[2] = _albedoRt.nameID;
+                _forwardMrts[2] = _baseColorRt.nameID;
             }
 
             // ====================================================================
@@ -114,7 +116,7 @@ namespace AdvanceExamples.Skin.MonteCarloSubsurfaceScattering.MrtComposite.Scrip
                 CoreUtils.SetRenderTarget(cmd, _scatteringRt, depthStencilRt, ClearFlag.Color, Color.black);
                 
                 // 在屏幕空间绘制 Monte Carlo SSS
-                CoreUtils.DrawFullScreen(cmd, _monteCarloCoreMaterial);
+                CoreUtils.DrawFullScreen(cmd, _scatteringMaterial);
             }
 
             // ====================================================================
@@ -127,7 +129,7 @@ namespace AdvanceExamples.Skin.MonteCarloSubsurfaceScattering.MrtComposite.Scrip
 
                 cmd.SetGlobalTexture(_scatteringRtId, _scatteringRt);
                 cmd.SetGlobalTexture(_specularRtId, _specularRt);
-                cmd.SetGlobalTexture(_albedoRtId, _albedoRt);
+                cmd.SetGlobalTexture(_baseColorRtId, _baseColorRt);
 
                 CoreUtils.SetRenderTarget(cmd, colorRt, depthStencilRt );
                 // 在屏幕空间绘制 Composite，合成 3 张 RT
@@ -136,7 +138,7 @@ namespace AdvanceExamples.Skin.MonteCarloSubsurfaceScattering.MrtComposite.Scrip
 
             public override void Execute(ScriptableRenderContext ctx, ref RenderingData renderingData)
             {
-                if(_monteCarloCoreMaterial == null || _compositeMaterial == null) return;
+                if(_scatteringMaterial == null || _compositeMaterial == null) return;
                 
                 CommandBuffer cmd = CommandBufferPool.Get();
 
@@ -156,7 +158,7 @@ namespace AdvanceExamples.Skin.MonteCarloSubsurfaceScattering.MrtComposite.Scrip
             {
                 _diffuseRt?.Release();
                 _specularRt?.Release();
-                _albedoRt?.Release();
+                _baseColorRt?.Release();
                 _scatteringRt?.Release();
             }
         }

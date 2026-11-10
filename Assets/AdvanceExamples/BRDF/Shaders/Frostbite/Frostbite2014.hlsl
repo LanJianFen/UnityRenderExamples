@@ -1,47 +1,12 @@
 #pragma once
-#include "../Fresnel.hlsl"
+#include "Frostbite2014Isotropic.hlsl"
+#include "Frostbite2014Anisotropic.hlsl"
+#include "Frostbite2014Fresnel.hlsl"
+#include "Frostbite2014Diffuse.hlsl"
 // ===================================================
 // Frostbite 2014
 // ===================================================
-// Frostbite 2014 也使用 GGX 的 D 项, α_D = roughness²
-// 针对移动端 FP16，为了防止除 0 和高光核爆，roughness 的最小值在被限制在了 10 的 -5 次方
-half D_GGX_Frostbite(half roughness, half NdotH)
-{
-    half alpha = roughness * roughness;
-    half alpha2 = max(alpha * alpha, 1e-5);
-    half denominator = PI * pow(NdotH * NdotH * (alpha2 - 1.0f) + 1.0f, 2.0f); // 分母
-    half D = alpha2 / denominator;
-    return D;
-}
 
-// 2014 纯正 高度相关 Smith G 项
-//  G(L,V) = 2 * (N · L) * (N · V) / [(N · V) * Al + (N · L) * Av]
-// Al = sqrt(α² + (1 - α²) * (N · L)²)
-// Av = sqrt(α² + (1 - α²) * (N · V)²)
-// V = G(L,V) / [4 * (N · L) * (N · V)] = rcp(2 * [(N · V) Al + (N · L) Av])
-// alpha clamp + 分母末端加 1e-5f 保护
-half V_SmithJoint_GGX_Frostbite(half roughness, half NdotL, half NdotV)
-{
-    half alpha = roughness * roughness;
-    half alpha2 = max(alpha * alpha, 1e-5h);;
-    half Al = sqrt(alpha2 + (1.0h - alpha2) * NdotL * NdotL);
-    half Av = sqrt(alpha2 + (1.0h - alpha2) * NdotV * NdotV);
-    half G_denominator = NdotV * Al + NdotL * Av;
-    half V = rcp(2.0h * (G_denominator + 1e-5h));
-    return V;
-}
-
-
-// 为了更符合感知曲线， Frostbite 把 Disney 的 0.08 * specular 改成了 0.16 * reflectance * reflectance
-// 真钻石（IOR=2.42）超过了 2.0, F0 约等于 0.172，Frostbite 上限只有 0.16，丢弃了 1% 的极限钻石精度
-// Frostbite 2014  原版使用的是 5 次方 F_Schlick_Approximation，
-half3 F_Schlick_Frostbite(half3 base_color, half reflectance, half metallic, half VdotH)
-{
-    half3 F0_dielectric = 0.16h * reflectance * reflectance;
-    half3 F0 = lerp(F0_dielectric, base_color, metallic);
-    half3 F = F_Schlick_Approximation(F0, VdotH);
-    return F;
-}
 
 
 // 向量都是 normalization 的
@@ -75,5 +40,32 @@ half3 DirectSpecularBrdfFrostbite(half roughness, half3 N, half3 L, half3 V, hal
     half3 specular_brdf = 
         D_GGX_Frostbite(roughness, NdotH) *  V_SmithJoint_GGX_Frostbite(roughness, NdotL, NdotV) *
         F_Schlick_Frostbite(base_color, reflectance, metallic, VdotH);
+    return specular_brdf;
+}
+
+
+
+// Frostbite 2014 各向异性直接光高光主函数
+half3 DirectSpecularBrdfAnisotropicFrostbite(half roughness, half anisotropy,
+    half3 N, half3 T, half3 B, half3 L, half3 V, half3 H,half3 base_color, half reflectance, half metallic)
+{
+    half NdotV = abs(dot(N, V)) + 1e-5h;
+    half NdotL = saturate(dot(N, L));
+    half NdotH = saturate(dot(N, H));
+    half VdotH = saturate(dot(V, H));
+    // 切线与副切线点乘保留正负号，不可 saturate
+    half TdotH = dot(T, H);
+    half BdotH = dot(B, H);
+    half TdotV = dot(T, V);
+    half BdotV = dot(B, V);
+    half TdotL = dot(T, L);
+    half BdotL = dot(B, L);
+    half alphax, alphay;
+    GetAnisotropicAlpha_Frostbite2014(roughness, anisotropy, alphax, alphay);
+
+    half3 specular_brdf = D_GGX_Anisotropic_Frostbite(alphax, alphay, TdotH, BdotH, NdotH) * 
+            V_SmithJoint_GGX_Anisotropic_Frostbite(alphax, alphay, TdotV, BdotV, NdotV, TdotL, BdotL, NdotL) *
+            F_Schlick_Frostbite(base_color, reflectance, metallic, VdotH);
+    
     return specular_brdf;
 }

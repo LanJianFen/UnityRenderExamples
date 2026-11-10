@@ -60,66 +60,50 @@ Shader "Advance Examples/SSS/Mrt MonteCarlo SSS"
             //}
 
             HLSLPROGRAM
-            /*#pragma vertex vert
+            #pragma vertex vert
             #pragma fragment frag
             
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
-            #include  "Assets/Common/Shaders/Math.hlsl"
-            #include  "Assets/Common/Shaders/BSDF.hlsl"
-            #include  "SubsurfaceInput.hlsl"
-            #include  "SubsurfaceLightAccumulator.hlsl"
-            #include  "SubsurfaceShadingCommon.hlsl"
-            #include  "SubsurfaceShadingModel.hlsl"
+            #include "SubsurfaceInput.hlsl"
+            #include "SubsurfaceVertexFactory.hlsl"
+            #include "SubsurfaceMaterialInputs.hlsl"
+            #include "SubstrateBsdfSlab.hlsl"
+            #include "SubsurfaceLightAccumulator.hlsl"
+            #include "SubsurfaceShadingModel.hlsl"
 
-            #pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE _MAIN_LIGHT_SHADOWS_SCREEN
-            #pragma multi_compile _ _ADDITIONAL_LIGHTS_VERTEX _ADDITIONAL_LIGHTS
-            #pragma multi_compile_fragment _ _ADDITIONAL_LIGHT_SHADOWS
-            #pragma multi_compile_fragment _ _SHADOWS_SOFT _SHADOWS_SOFT_LOW _SHADOWS_SOFT_MEDIUM _SHADOWS_SOFT_HIGH
-            #pragma multi_compile_fragment _ _FORWARD_PLUS
-            
-            struct FSubsurfaceFragOutput
+            FBasePassVSToPS vert(FVertexFactoryInput Input)
             {
-                half4 diffuse  : SV_Target0; // RT0: diffuse RT (供 SSS 模糊)
-                half3 specular : SV_Target1; // RT1: Total Non-scattered / Specular
-                half3 albedo   : SV_Target2; // RT2: Material Albedo, 最后一起合成
-            };
-            
-            FVertexToPixel vert(FVertexInput i)
-            {
-                FVertexToPixel o = (FVertexToPixel)0;
-                o.uv01 = float4(i.uv0, i.uv1), o.uv23 = float4(i.uv2, i.uv3);
-                o.position_ws = TransformObjectToWorld(i.position_os.xyz);
-                o.position_cs = TransformWorldToHClip(o.position_ws.xyz);
-                
-                float4 ndc = o.position_cs * 0.5f;
-                o.position_ndc.xy = float2(ndc.x, ndc.y * _ProjectionParams.x) + ndc.w;
-                o.position_ndc.zw = o.position_cs.zw;
-                
-                o.normal_ws = TransformObjectToWorldNormal(i.normal_os, true);
-                real sign = real(i.tangent_os.w) * GetOddNegativeScale();
-                o.tangent_ws = real4(TransformObjectToWorldDir(i.tangent_os.xyz), sign);
-                return o;
+                FBasePassVSToPS Output;
+                float3 WorldPosition = TransformObjectToWorld(Input.Position.xyz);
+                Output.Position            = TransformWorldToHClip(WorldPosition);
+                Output.FactoryInterpolants = VertexFactoryGetInterpolantsVSToPS(Input);
+                return Output;
             }
             
-            FSubsurfaceFragOutput frag(FVertexToPixel i) : SV_Target
+            FSubsurfaceFragOutput frag(FVertexFactoryInterpolantsVSToPS Interpolants, float4 SvPosition : SV_POSITION, FRONT_FACE_TYPE bIsFrontFace : FRONT_FACE_SEMANTIC) : SV_TARGET
             {
                 FSubsurfaceFragOutput o = (FSubsurfaceFragOutput)0;
 
                 // 阶段 1：几何上下文
-                FMaterialPixelParameters pixel_params = SetupMaterialPixelParameters(i);
+                FMaterialPixelParameters PixelParameters = GetMaterialPixelParameters(Interpolants, SvPosition);
 
                 // 阶段 2：采样贴图与材质解包
-                FPixelMaterialInputs material_inputs = GetPixelMaterialInputs(pixel_params);
-
+                //FPixelMaterialInputs material_inputs = GetPixelMaterialInputs(pixel_params);
+                FPixelMaterialInputs MaterialInputs = (FPixelMaterialInputs)0;
+                float4 ScreenPosition = SvPositionToResolvedScreenPosition(SvPosition);
+                float3 TranslatedWorldPosition = SvPositionToResolvedTranslatedWorld(SvPosition);
+                CalcMaterialParametersEx(PixelParameters, MaterialInputs, SvPosition, ScreenPosition,
+                                         bIsFrontFace, TranslatedWorldPosition, TranslatedWorldPosition);
+            
                 // 阶段 3： GBUFFER 数据, 模拟 UE5 的 Deffered Rendering
-                FGBufferData buffer = SetupGBufferData(pixel_params, material_inputs);
+                //FGBufferData buffer = SetupGBufferData(PixelParameters, material_inputs);
                 
                 // 阶段 4： BSDF 数据
-                FSubstrateBSDF bsdf = SetupSubstrateBSDF(pixel_params, material_inputs);
-                
+                FSubstrateBSDFSlab slab = SetupSubstrateBSDF(PixelParameters, MaterialInputs);
+
                 // 阶段 5：逐光源光照积分求值与累加
-                FLightingAccumulator accumulator = EvaluateAllLighting(bsdf, pixel_params);
+                FLightingAccumulator accumulator = EvaluateAllLighting(slab, PixelParameters);
 
                 // 输出至 3 张 Render Target (MRT)
                 o.diffuse  = half4(accumulator.scatterable_light, 1.0f);
@@ -127,7 +111,7 @@ Shader "Advance Examples/SSS/Mrt MonteCarlo SSS"
                 o.albedo   = bsdf.diffuse_albedo;
 
                 return o;
-            }*/
+            }
             ENDHLSL
         }
     }

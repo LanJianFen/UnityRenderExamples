@@ -52,9 +52,28 @@ Shader "Advance Examples/SSS/MonteCarlo SSS"
         
         Pass
         {
+            Name "DepthOnly"
+            Tags { "LightMode" = "DepthOnly" }
+
+            ZWrite On
+            ColorMask R      // URP 14 标准写法
+            Cull Back        // 和皮肤其他 Pass 的 Cull 保持一致
+
+            HLSLPROGRAM
+            #pragma vertex   DepthOnlyVert
+            #pragma fragment DepthOnlyFrag
+            #pragma multi_compile_instancing
+            
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include "SubsurfaceDepthOnly.hlsl"
+            ENDHLSL
+        }
+
+        Pass
+        {
             Tags
             {
-                "LightMode" = "Monte Carlo Subsurface Direct Diffuse"
+                "LightMode" = "Monte Carlo Subsurface Forward"
             }
 
             /*Stencil
@@ -88,20 +107,20 @@ Shader "Advance Examples/SSS/MonteCarlo SSS"
             half4 frag(FVertexFactoryInterpolantsVSToPS Interpolants, float4 SvPosition : SV_POSITION, FRONT_FACE_TYPE bIsFrontFace : FRONT_FACE_SEMANTIC) : SV_TARGET
             {
                 // 阶段 1 : 像素上下文
-                FMaterialPixelParameters MaterialParameters = GetMaterialPixelParameters(Interpolants, SvPosition);
+                FMaterialPixelParameters PixelParameters = GetMaterialPixelParameters(Interpolants, SvPosition);
                 
                 // 阶段 2 : 材质引脚解包 + 像素上下文 Ex
-                FPixelMaterialInputs PixelMaterialInputs = (FPixelMaterialInputs)0;
+                FPixelMaterialInputs MaterialInputs = (FPixelMaterialInputs)0;
                 float4 ScreenPosition = SvPositionToResolvedScreenPosition(SvPosition);
                 float3 TranslatedWorldPosition = SvPositionToResolvedTranslatedWorld(SvPosition);
-                CalcMaterialParametersEx(MaterialParameters, PixelMaterialInputs, SvPosition, ScreenPosition,
+                CalcMaterialParametersEx(PixelParameters, MaterialInputs, SvPosition, ScreenPosition,
                                          bIsFrontFace, TranslatedWorldPosition, TranslatedWorldPosition);
             
                 // 阶段 3 : Bsdf Slab 填充
-                FSubstrateBSDFSlab slab = SetupSubstrateBSDF(MaterialParameters, PixelMaterialInputs);
+                FSubstrateBSDFSlab slab = SetupSubstrateBSDF(PixelParameters, MaterialInputs);
                 
                 Light mainLight = GetMainLight();
-                FBxDFContext ctx = InitBxDFContext(MaterialParameters.WorldNormal, MaterialParameters.CameraVector,  normalize(mainLight.direction));
+                FBxDFContext ctx = InitBxDFContext(PixelParameters.WorldNormal, PixelParameters.CameraVector,  normalize(mainLight.direction));
                 DirectLighting lighting = EvaluateDirectLighting(slab, ctx, mainLight.color * mainLight.shadowAttenuation * mainLight.distanceAttenuation);
 
                 return half4(lighting.diffuse, 1.0h);

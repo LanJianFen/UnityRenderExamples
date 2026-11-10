@@ -1,6 +1,6 @@
 #pragma once
 
-struct FDirectLighting
+struct FSubsurfaceFragOutput
 {
     half3 diffuse;
     half3 specular;

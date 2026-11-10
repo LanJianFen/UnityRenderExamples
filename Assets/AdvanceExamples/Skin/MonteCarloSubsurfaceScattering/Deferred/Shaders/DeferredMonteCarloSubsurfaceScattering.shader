@@ -65,6 +65,8 @@
             #pragma vertex vert
             #pragma fragment frag
             
+            #pragma multi_compile_fragment _ _GBUFFER_NORMALS_OCT
+
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/UnityGBuffer.hlsl"
@@ -73,9 +75,6 @@
             #include "DeferredSubsurfaceMaterialInputs.hlsl"
             #include "DeferredSubsurfaceGBuffer.hlsl"
             #include "DeferredSubsurfaceShadingModel.hlsl"
-            
-            #pragma multi_compile_fragment _ _GBUFFER_NORMALS_OCT
-
             
             FBasePassVSToPS vert(FVertexFactoryInput Input)
             {

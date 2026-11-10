@@ -11,9 +11,81 @@ namespace AdvanceExamples.Skin.MonteCarloSubsurfaceScattering.GeometryComposite.
 
     public class MonteCarloSubsurfaceScatteringRenderFeature : ScriptableRendererFeature
     {
+        private class MonteCarloSubsurfaceForwardPass : ScriptableRenderPass
+        {
+            private static readonly ProfilingSampler _profilingSampler =  new ("Monte Carlo Subsurface Forward");
+            
+            // settings
+            private Settings _settings;
+            
+            // LightMode
+            private static readonly ShaderTagId _diffuseTagId = new ("Monte Carlo Subsurface Forward");
+
+            // Params
+            private static readonly int _baseColorScatteringWeightParam = Shader.PropertyToID("_MonteCarloBaseColorScatteringWeight");
+
+            // Rt
+            private RTHandle _diffuseRt;
+            private static readonly int _diffuseRtId = Shader.PropertyToID("_MonteCarloSubsurfaceDiffuseRt");
+
+            public void Setup(Settings settings)
+            {
+                _settings = settings;
+                renderPassEvent = settings.ForwardPassEvent;
+            }
+            
+            public MonteCarloSubsurfaceForwardPass(Settings settings)
+            {
+                Setup(settings);
+            }
+            
+            public override void OnCameraSetup(CommandBuffer cmd, ref RenderingData renderingData)
+            {
+                // 获取相机的配置
+                RenderTextureDescriptor descriptor = renderingData.cameraData.cameraTargetDescriptor;
+                descriptor.graphicsFormat = GraphicsFormat.R16G16B16A16_SFloat;
+                descriptor.depthStencilFormat = GraphicsFormat.None;
+                
+                RenderingUtils.ReAllocateIfNeeded(ref _diffuseRt, descriptor, FilterMode.Point,TextureWrapMode.Clamp, name: "_MonteCarloScatteringDiffuseRt");
+            }
+            
+            // ==================================
+            // Pass 1 :Direct Diffuse 只输出 直接光的 diffuse 到 _sssDirectDiffuseRT
+            // ==================================
+            public override void Execute(ScriptableRenderContext ctx, ref RenderingData renderingData)
+            {
+                CommandBuffer cmd = CommandBufferPool.Get();
+                
+                using (var profilingScope = new ProfilingScope(cmd, _profilingSampler))
+                {
+                    // 按默认的渲染顺序，只给 opaque 的物体执行
+                    SortingCriteria sorting = renderingData.cameraData.defaultOpaqueSortFlags;
+                    DrawingSettings drawing = CreateDrawingSettings(_diffuseTagId, ref renderingData, sorting);
+                    FilteringSettings filtering = new(RenderQueueRange.opaque);
+
+                    cmd.SetGlobalFloat(_baseColorScatteringWeightParam, _settings.BaseColorScatteringWeight);
+                    RTHandle depthStencilRt = renderingData.cameraData.renderer.cameraDepthTargetHandle;
+                    CoreUtils.SetRenderTarget(cmd, _diffuseRt, depthStencilRt, ClearFlag.Color, Color.black);
+                    ctx.ExecuteCommandBuffer(cmd);
+                    cmd.Clear();
+
+                    ctx.DrawRenderers(renderingData.cullResults, ref drawing, ref filtering);
+                    cmd.SetGlobalTexture(_diffuseRtId, _diffuseRt); // 把 Pass 1 画好的交给 MonteCarlo Pass 2
+                }
+
+                ctx.ExecuteCommandBuffer(cmd);
+                CommandBufferPool.Release(cmd);
+            }
+            
+            public void Dispose()
+            {
+                _diffuseRt?.Release();
+            }
+        }
+
         private class MonteCarloSubsurfaceScatteringPass : ScriptableRenderPass
         {
-            private static ProfilingSampler _profilingSampler =  new ("Monte Carlo Subsurface");
+            private static readonly ProfilingSampler _profilingSampler =  new ("Monte Carlo Subsurface Composite");
             
             // settings
             private Settings _settings;
@@ -22,24 +94,22 @@ namespace AdvanceExamples.Skin.MonteCarloSubsurfaceScattering.GeometryComposite.
             private readonly Material _scatteringMaterial;
             
             // LightMode
-            private readonly ShaderTagId _diffuseTagId = new ("Monte Carlo Subsurface Direct Diffuse");
-            private readonly ShaderTagId _compositeTagId = new ("Monte Carlo Subsurface Composite");
+            private static readonly ShaderTagId _compositeTagId = new ("Monte Carlo Subsurface Composite");
             
             // Params
-            private static readonly int _rcpScatteringDistanceParams = Shader.PropertyToID("_RcpMonteCarloScatteringDistance");
-            private static readonly int _scatteringScaleParams = Shader.PropertyToID("_MonteCarloScatteringScale");
-            private static readonly int _sampleNumParams = Shader.PropertyToID("_MonteCarloScatteringSampleNum");
-            private static readonly int _baseColorScatteringWeightParams = Shader.PropertyToID("_MonteCarloBaseColorScatteringWeight");
+            private static readonly int _rcpScatteringDistanceParam = Shader.PropertyToID("_RcpMonteCarloScatteringDistance");
+            private static readonly int _scatteringScaleParam = Shader.PropertyToID("_MonteCarloScatteringScale");
+            private static readonly int _sampleNumParam = Shader.PropertyToID("_MonteCarloScatteringSampleNum");
+            private static readonly int _baseColorScatteringWeightParam = Shader.PropertyToID("_MonteCarloBaseColorScatteringWeight");
 
             // Rt
-            private RTHandle _diffuseRt,  _scatteredRt;
-            private static readonly int _diffuseRtId = Shader.PropertyToID("_MonteCarloSubsurfaceDiffuseRt");
+            private RTHandle _scatteredRt;
             private static readonly int _scatteredRtId = Shader.PropertyToID("_MonteCarloSubsurfaceScatteredRt");
 
             public void Setup(Settings settings)
             {
                 _settings = settings;
-                renderPassEvent = settings.RenderPassEvent;
+                renderPassEvent = settings.ScatteringPassEvent;
             }
             
             public MonteCarloSubsurfaceScatteringPass(Settings settings, Material scatteringMaterial )
@@ -55,27 +125,7 @@ namespace AdvanceExamples.Skin.MonteCarloSubsurfaceScattering.GeometryComposite.
                 descriptor.graphicsFormat = GraphicsFormat.R16G16B16A16_SFloat;
                 descriptor.depthStencilFormat = GraphicsFormat.None;
                 
-                RenderingUtils.ReAllocateIfNeeded(ref _diffuseRt, descriptor, FilterMode.Point,TextureWrapMode.Clamp, name: "_MonteCarloScatteringDiffuseRt");
                 RenderingUtils.ReAllocateIfNeeded(ref _scatteredRt, descriptor, FilterMode.Bilinear, TextureWrapMode.Clamp, name: "_MonteCarloScatteredRt");
-            }
-
-            // ==================================
-            // Pass 1 :Direct Diffuse 只输出 直接光的 diffuse 到 _sssDirectDiffuseRT
-            // ==================================
-            private void ExecuteDiffusePass(ref ScriptableRenderContext context,  ref RenderingData renderingData, CommandBuffer cmd)
-            {
-                // 按默认的渲染顺序，只给 opaque 的物体执行
-                SortingCriteria sorting = renderingData.cameraData.defaultOpaqueSortFlags;
-                DrawingSettings drawing = CreateDrawingSettings(_diffuseTagId, ref renderingData, sorting);
-                FilteringSettings filtering = new(RenderQueueRange.opaque);
-
-                cmd.SetGlobalFloat(_baseColorScatteringWeightParams, _settings.BaseColorScatteringWeight);
-                RTHandle depthStencilRt = renderingData.cameraData.renderer.cameraDepthTargetHandle;
-                CoreUtils.SetRenderTarget(cmd, _diffuseRt, depthStencilRt, ClearFlag.Color, Color.black);
-                context.ExecuteCommandBuffer(cmd);
-                cmd.Clear();
-
-                context.DrawRenderers(renderingData.cullResults, ref drawing, ref filtering);
             }
 
             // ==================================
@@ -94,10 +144,9 @@ namespace AdvanceExamples.Skin.MonteCarloSubsurfaceScattering.GeometryComposite.
                     Mathf.Min(rcpDistanceR, Mathf.Min(rcpDistanceG, rcpDistanceB))
                 );
                 
-                cmd.SetGlobalTexture(_diffuseRtId, _diffuseRt); // 把 Pass 1 画好的交给 MonteCarlo Pass 2
-                cmd.SetGlobalVector(_rcpScatteringDistanceParams, rcpScatteringDistanceParams);
-                cmd.SetGlobalFloat(_scatteringScaleParams, _settings.ScatteringScale);
-                cmd.SetGlobalInt(_sampleNumParams, _settings.SampleNum);
+                cmd.SetGlobalVector(_rcpScatteringDistanceParam, rcpScatteringDistanceParams);
+                cmd.SetGlobalFloat(_scatteringScaleParam, _settings.ScatteringScale);
+                cmd.SetGlobalInt(_sampleNumParam, _settings.SampleNum);
                 
                 RTHandle depthStencilRt = renderingData.cameraData.renderer.cameraDepthTargetHandle;
                 CoreUtils.SetRenderTarget(cmd, _scatteredRt, depthStencilRt, ClearFlag.Color, Color.black);
@@ -118,7 +167,7 @@ namespace AdvanceExamples.Skin.MonteCarloSubsurfaceScattering.GeometryComposite.
                 RTHandle colorRt = renderingData.cameraData.renderer.cameraColorTargetHandle;
                 RTHandle depthStencilRt = renderingData.cameraData.renderer.cameraDepthTargetHandle;
 
-                cmd.SetGlobalFloat(_baseColorScatteringWeightParams, _settings.BaseColorScatteringWeight);
+                cmd.SetGlobalFloat(_baseColorScatteringWeightParam, _settings.BaseColorScatteringWeight);
                 cmd.SetGlobalTexture(_scatteredRtId, _scatteredRt);
                 CoreUtils.SetRenderTarget(cmd, colorRt, depthStencilRt);
                 
@@ -136,7 +185,7 @@ namespace AdvanceExamples.Skin.MonteCarloSubsurfaceScattering.GeometryComposite.
                 
                 using (var profilingScope = new ProfilingScope(cmd, _profilingSampler))
                 {
-                    ExecuteDiffusePass(ref ctx, ref renderingData, cmd);
+                    //ExecuteDiffusePass(ref ctx, ref renderingData, cmd);
                     ExecuteSubSurfacePass(ref ctx, ref renderingData, cmd);
                     ExecuteCompositePass(ref ctx, ref renderingData, cmd);
                 }
@@ -147,7 +196,6 @@ namespace AdvanceExamples.Skin.MonteCarloSubsurfaceScattering.GeometryComposite.
             
             public void Dispose()
             {
-                _diffuseRt?.Release();
                 _scatteredRt?.Release();
             }
         }
@@ -155,7 +203,8 @@ namespace AdvanceExamples.Skin.MonteCarloSubsurfaceScattering.GeometryComposite.
         [Serializable]
         public class Settings
         {
-            public RenderPassEvent RenderPassEvent = RenderPassEvent.AfterRenderingOpaques;
+            public RenderPassEvent ForwardPassEvent = RenderPassEvent.AfterRenderingOpaques;
+            public RenderPassEvent ScatteringPassEvent = RenderPassEvent.BeforeRenderingTransparents;
             [ColorUsage(false, true)] public Color ScatteringDistance = new (15.0f, 5.0f, 2.0f, 1.0f);
             [Range(0f, 10f)] public float ScatteringScale = 1.0f;  // 模型的缩放大小，用于巨人和正常人
             [Range(0f, 1f)] public float BaseColorScatteringWeight = 0.5f;
@@ -166,8 +215,9 @@ namespace AdvanceExamples.Skin.MonteCarloSubsurfaceScattering.GeometryComposite.
         
         [HideInInspector] public Shader ScatteringShader;  
         private Material _scatteringMaterial;
-        
-        MonteCarloSubsurfaceScatteringPass _monteCarloSubsurfaceScatteringPass;
+
+        private MonteCarloSubsurfaceForwardPass _monteCarloSubsurfaceForwardPass;
+        private MonteCarloSubsurfaceScatteringPass _monteCarloSubsurfaceScatteringPass;
 
         public void OnValidate()
         {
@@ -176,6 +226,7 @@ namespace AdvanceExamples.Skin.MonteCarloSubsurfaceScattering.GeometryComposite.
             if(ScatteringShader == null) ScatteringShader = Shader.Find("Advance Examples/SSS/MonteCarlo SSS Core");
             
             _monteCarloSubsurfaceScatteringPass   ?.Setup(settings);
+            _monteCarloSubsurfaceForwardPass       ?.Setup(settings);
         }
         
         public override void Create()
@@ -184,17 +235,20 @@ namespace AdvanceExamples.Skin.MonteCarloSubsurfaceScattering.GeometryComposite.
             // 在内存里创建核心的 SSS Material
             if (_scatteringMaterial == null) _scatteringMaterial = CoreUtils.CreateEngineMaterial(ScatteringShader);
             // 创建 SSS 的 Render Pass
+            _monteCarloSubsurfaceForwardPass = new(settings);
             _monteCarloSubsurfaceScatteringPass = new (settings, _scatteringMaterial);
         }
 
         public override void AddRenderPasses(ScriptableRenderer renderer, ref RenderingData renderingData)
         {
             if (_scatteringMaterial == null) return;
+            renderer.EnqueuePass(_monteCarloSubsurfaceForwardPass);
             renderer.EnqueuePass(_monteCarloSubsurfaceScatteringPass);
         }
 
         protected override void Dispose(bool disposing)
         {
+            _monteCarloSubsurfaceForwardPass?.Dispose();
             _monteCarloSubsurfaceScatteringPass?.Dispose();
             CoreUtils.Destroy(_scatteringMaterial);
         }
